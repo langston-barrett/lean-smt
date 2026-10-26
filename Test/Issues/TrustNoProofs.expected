@@ -1,0 +1,3 @@
+Test/Issues/TrustNoProofs.lean:9:0: warning: declaration uses `sorry`
+Test/Issues/TrustNoProofs.lean:13:0: warning: declaration uses `sorry`
+Test/Issues/TrustNoProofs.lean:18:2: error: unable to prove goal, either it is false or you need to provide more facts. Try adding '+model' config option to display a potential counter-example (experimental).

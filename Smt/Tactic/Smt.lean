@@ -205,10 +205,11 @@ def smt (cfg : Config) (mv : MVarId) (hs : Array Expr) : MetaM Result := mv.with
   -- 2. Preprocess the hints and goal.
   let steps := if cfg.mono then #[Preprocess.mono] else #[Preprocess.pushHintsToCtx] ++
               (if cfg.intros then #[Preprocess.intros] else #[]) ++ #[Preprocess.negateGoal]
-  let steps := if cfg.normalize then steps.push Preprocess.normalize else steps
+  -- Under `trust`, the original goal is admitted, so the preprocessing proofs are not needed.
+  let steps := if cfg.normalize then steps.push (Preprocess.normalizeWithProofs !cfg.trust) else steps
   let steps :=
     if cfg.embeddings then
-      steps.push <| Preprocess.embeddingWithConfig { embedBool := cfg.embedBool }
+      steps.push <| Preprocess.embeddingWithConfig { embedBool := cfg.embedBool, proofs := !cfg.trust }
     else
       steps
   let ⟨map, hs₁, mv₁⟩ ← Preprocess.applySteps mv₀ hs steps

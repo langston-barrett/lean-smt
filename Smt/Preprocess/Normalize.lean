@@ -13,6 +13,8 @@ public import Smt.Preprocess.Basic
 public meta import Smt.Preprocess.Basic
 public import Smt.Preprocess.Normalize.Attribute
 public meta import Smt.Preprocess.Normalize.Attribute
+public import Smt.Preprocess.SimpNoProofs
+public meta import Smt.Preprocess.SimpNoProofs
 
 public meta section
 
@@ -20,7 +22,9 @@ namespace Smt.Preprocess
 
 open Lean
 
-def normalize (mv : MVarId) (hs : Array Expr) : MetaM Result := mv.withContext do
+/-- Normalize the goal and hypotheses. If `proofs` is false, the proof that the normalized goal
+implies the original one has placeholders (see `SimpNoProofs`), so the goal must be admitted. -/
+def normalizeWithProofs (proofs : Bool) (mv : MVarId) (hs : Array Expr) : MetaM Result := mv.withContext do
   -- Find the smt_normalize simp theorems.
   let some thmsExt ← Meta.getSimpExtension? `smt_normalize | throwError "smt_normalize simp extension not found"
   let some procsExt ← Meta.Simp.getSimprocExtension? `smt_normalize | throwError "smt_normalize simproc extension not found"
@@ -42,7 +46,7 @@ def normalize (mv : MVarId) (hs : Array Expr) : MetaM Result := mv.withContext d
   -- Simplify the goal using the smt_normalize theorems.
   let congrTheorems ← Meta.getSimpCongrTheorems
   let ctx ← Meta.Simp.mkContext { zeta := false, singlePass := true } simpTheorems congrTheorems
-  let (some mv, _) ← Meta.simpTarget mv ctx simpProcs (mayCloseGoal := false) | throwError "[smt_normalize] simplification failed"
+  let some mv ← simpTarget mv ctx simpProcs proofs | throwError "[smt_normalize] simplification failed"
   -- Re-introduce all free vars.
   let (fvs'', mv) ← mv.introNP fvs'.size
   -- Compose the final map from new free vars to old ones.
@@ -58,5 +62,8 @@ where
   inverse (m : Std.HashMap Expr Expr) : Std.HashMap Expr Expr :=
     m.fold (init := {}) fun map k v =>
       map.insert v k
+
+def normalize (mv : MVarId) (hs : Array Expr) : MetaM Result :=
+  normalizeWithProofs true mv hs
 
 end Smt.Preprocess

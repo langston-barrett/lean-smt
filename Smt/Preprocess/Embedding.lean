@@ -13,6 +13,8 @@ public import Smt.Preprocess.Basic
 public meta import Smt.Preprocess.Basic
 public import Smt.Preprocess.Embedding.Attribute
 public meta import Smt.Preprocess.Embedding.Attribute
+public import Smt.Preprocess.SimpNoProofs
+public meta import Smt.Preprocess.SimpNoProofs
 
 public meta section
 
@@ -31,6 +33,9 @@ structure EmbeddingConfig where
   embedRat : Bool := true
   /-- Whether to embed `Bool` into `Prop`. -/
   embedBool : Bool := true
+  /-- Whether to build the proof that the embedded goal implies the original one. If not, the
+      proof has placeholders (see `SimpNoProofs`), so the goal must be admitted. -/
+  proofs : Bool := true
 
 /-- The base types selected by `cfg`, in embedding order. -/
 def EmbeddingConfig.baseTypes (cfg : EmbeddingConfig) : MetaM (Array Name) := do
@@ -86,7 +91,7 @@ def embeddingWithConfig (cfg : EmbeddingConfig) (mv : MVarId) (hs : Array Expr) 
   -- Simplify the goal using the embedding theorems.
   let congrTheorems ← Meta.getSimpCongrTheorems
   let ctx ← Meta.Simp.mkContext { zeta := false, singlePass := true } simpTheorems congrTheorems
-  let (some mv, _) ← Meta.simpTarget mv ctx simpProcs (mayCloseGoal := false) | throwError "[embedding] simplification failed"
+  let some mv ← simpTarget mv ctx simpProcs cfg.proofs | throwError "[embedding] simplification failed"
   -- Extend `fvs` to account for `nonneg` assumptions.
   let bts := bts.filter (· != ``Bool) -- Do not consider `Bool` for assumptions.
   let mut fvs' : Array (Option FVarId) := #[]
