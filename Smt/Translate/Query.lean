@@ -145,41 +145,47 @@ def addDefineCommandFor (nm : String) (e : Expr) (params : Array Expr) (cod : Ex
 def addDeclareCommandFor (nm : String) (e tp : Expr) (params : Array Expr) (cod : Expr)
     : QueryBuilderM (Array Expr) := do
   if cod.isSort && !cod.isProp then
-    -- For simple (non-parametric) inductive types, emit a
-    -- `declare-datatypes` command so the solver has full algebraic datatype support.
-    if params.isEmpty then
-      if let some cname := e.constName? then
-        if let some (.inductInfo iVal) := (← getEnv).find? cname then
-          if iVal.numParams == 0 && iVal.numIndices == 0 then
-            -- Build the list of constructor declarations with field selectors.
-            let mut allDeps : Array Expr := #[]
-            let mut ctorDecls : List (String × List (String × Term)) := []
-            let mut allOk := true
-            for ctorNm in iVal.ctors do
-              match (← getEnv).find? ctorNm with
-              | some (.ctorInfo cVal) =>
-                let fields := ctorFieldTypes cVal.numFields cVal.type
-                let mut fieldDecls : List (String × Term) := []
-                let mut selectorNames : Std.HashSet String := {}
-                let mut idx := 0
-                for (fname, ftype) in fields do
-                  let baseName :=
-                    if fname == Name.anonymous then s!"field{idx + 1}" else fname.toString
-                  let mut selectorName := s!"{ctorNm}.{baseName}"
-                  let mut suffix := 1
-                  while selectorNames.contains selectorName do
-                    selectorName := s!"{ctorNm}.{baseName}_{suffix}"
-                    suffix := suffix + 1
-                  selectorNames := selectorNames.insert selectorName
-                  let (tmSort, deps) ← translateAndFindDeps ftype (fvarDeps := false)
-                  fieldDecls := fieldDecls ++ [(selectorName, tmSort)]
-                  allDeps := allDeps ++ deps
-                  idx := idx + 1
-                ctorDecls := ctorDecls ++ [(ctorNm.toString, fieldDecls)]
-              | _ => allOk := false
-            if allOk then
+    -- For inductive types without indices, emit a `declare-datatypes` command so the solver has
+    -- full algebraic datatype support. An inductive type with parameters becomes a parametric
+    -- datatype (`par`), whose sort parameters are the parameters `params` of its type.
+    if let some cname := e.constName? then
+      if let some (.inductInfo iVal) := (← getEnv).find? cname then
+        if iVal.numIndices == 0 && iVal.numParams == params.size &&
+            (← params.allM fun p => return (← inferType p).isSort) then
+          -- Build the list of constructor declarations with field selectors.
+          let mut allDeps : Array Expr := #[]
+          let mut ctorDecls : List (String × List (String × Term)) := []
+          let mut allOk := true
+          for ctorNm in iVal.ctors do
+            match (← getEnv).find? ctorNm with
+            | some (.ctorInfo cVal) =>
+              -- The fields' types, with the inductive type's parameters instantiated to `params`.
+              let fields := ctorFieldTypes cVal.numFields (← instantiateForall cVal.type params)
+              let mut fieldDecls : List (String × Term) := []
+              let mut selectorNames : Std.HashSet String := {}
+              let mut idx := 0
+              for (fname, ftype) in fields do
+                let baseName :=
+                  if fname == Name.anonymous then s!"field{idx + 1}" else fname.toString
+                let mut selectorName := s!"{ctorNm}.{baseName}"
+                let mut suffix := 1
+                while selectorNames.contains selectorName do
+                  selectorName := s!"{ctorNm}.{baseName}_{suffix}"
+                  suffix := suffix + 1
+                selectorNames := selectorNames.insert selectorName
+                let (tmSort, deps) ← translateAndFindDeps ftype (fvarDeps := false)
+                fieldDecls := fieldDecls ++ [(selectorName, tmSort)]
+                allDeps := allDeps ++ deps
+                idx := idx + 1
+              ctorDecls := ctorDecls ++ [(ctorNm.toString, fieldDecls)]
+            | _ => allOk := false
+          if allOk then
+            if params.isEmpty then
               addCommand e <| .declareDatatypes [(nm, 0)] [ctorDecls]
-              return allDeps
+            else
+              let ps ← params.toList.mapM fun p => return (← getFVarLocalDecl p).userName.toString
+              addCommand e <| .declareParDatatype nm ps ctorDecls
+            return allDeps
     addCommand e <| .declareSort nm params.size
     return #[]
   else

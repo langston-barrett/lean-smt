@@ -39,6 +39,16 @@ private def isBuiltinName (n : Name) : Bool :=
 private def stripSMTPipes (s : String) : String :=
   if s.startsWith "|" && s.endsWith "|" then (s.drop 1 |>.dropEnd 1).toString else s
 
+/-- The symbol of a constructor, which cvc5 prints qualified by its sort, `(as C (D σ))`, when it
+belongs to a parametric datatype. -/
+private def unqualify (s : String) : String :=
+  if !s.startsWith "(as " then s else
+  let rest := (s.drop 4).toString
+  if rest.startsWith "|" then
+    -- A quoted symbol ends at the next `|`.
+    "|" ++ ((rest.drop 1).takeWhile (· != '|')).toString ++ "|"
+  else (rest.takeWhile fun c => !c.isWhitespace && c != ')').toString
+
 private def getFVarOrConstExpr! (n : String) : ReconstructM Expr := do
   match (← read).userNames[n]? with
   | some e => return e
@@ -48,13 +58,18 @@ private def getFVarOrConstExpr! (n : String) : ReconstructM Expr := do
       let c ← getConstInfo n.toName
       return .const c.name (c.numLevelParams.repeat (.zero :: ·) [])
 
+/-- Whether `s` is a datatype sort. cvc5 gives an instance of a parametric datatype, such as
+`(Option Int)`, an internal kind rather than `DATATYPE_SORT`. -/
+private def isDatatypeSort (s : cvc5.Sort) : Bool :=
+  s.getKind! == .DATATYPE_SORT || (s.isInstantiated && s.isDatatype)
+
 @[smt_sort_reconstruct] def reconstructDatatypeSort : SortReconstructor := fun s => do
-  match s.getKind! with
-  | .DATATYPE_SORT =>
-    let name := s.getDatatype!.getName!
-    if isBuiltinName name.toName then return none
-    getFVarOrConstExpr! name
-  | _ => return none
+  unless isDatatypeSort s do return none
+  let name := s.getDatatype!.getName!
+  if isBuiltinName name.toName then return none
+  -- An instance of a parametric datatype is the inductive type applied to its parameters.
+  let params := if s.isInstantiated then s.getInstantiatedParameters! else #[]
+  return mkAppN (← getFVarOrConstExpr! name) (← params.mapM reconstructSort)
 
 @[smt_term_reconstruct] def reconstructDatatypeTerm : TermReconstructor := fun t => do
   match t.getKind! with
@@ -62,9 +77,13 @@ private def getFVarOrConstExpr! (n : String) : ReconstructM Expr := do
     -- t[0]! is the constructor symbol. It has INTERNAL_KIND in cvc5 (even for non-zero-arity),
     -- so we look it up by name instead of calling reconstructTerm recursively.
     -- toString may include SMT-LIB pipe escaping (e.g., "|mynat'.succ|"), so strip it.
-    let ctorName := stripSMTPipes t[0]!.toString
+    let ctorName := stripSMTPipes (unqualify t[0]!.toString)
     if isBuiltinName ctorName.toName then return none
     let mut curr ← getFVarOrConstExpr! ctorName
+    -- A constructor of a parametric datatype takes the instance's parameters first.
+    let sort := t.getSort!
+    if sort.isInstantiated then
+      curr := mkAppN curr (← sort.getInstantiatedParameters!.mapM reconstructSort)
     for i in [1:t.getNumChildren] do
       curr := .app curr (← reconstructTerm t[i]!)
     return curr
@@ -72,16 +91,13 @@ private def getFVarOrConstExpr! (n : String) : ReconstructM Expr := do
 
 /-- Build a Lean proof of `(t = s) = False` where `t` and `s` are
 distinct constructors of the same inductive type. Uses the `noConfusion`
-principle that Lean auto-generates for every inductive type. -/
+principle that Lean auto-generates for every inductive type, which `mkNoConfusion` applies to the
+type's parameters, if any. -/
 private def proveConsClash (t s : Expr) : MetaM Expr := do
-  let α ← inferType t
-  let .const αName _ := α.getAppFn
-    | throwError "Smt.Reconstruct.Datatype: expected inductive type, got {α}"
-  let ncName := αName ++ `noConfusion
   let heq ← mkEq t s
   -- Forward: (t = s) → False  via noConfusion with motive False
   let fwd ← withLocalDeclD `h heq fun h => do
-    let nc ← mkAppOptM ncName #[some (mkConst ``False), some t, some s, some h]
+    let nc ← mkNoConfusion (mkConst ``False) h
     mkLambdaFVars #[h] nc
   -- Backward: False → (t = s)  via False.elim
   let bwd ← withLocalDeclD `h (mkConst ``False) fun h => do
@@ -98,7 +114,7 @@ def reconstructRewrite (pf : cvc5.Proof) : ReconstructM (Option Expr) := do
     -- Only handle the "clash" case: (t = s) = false (distinct constructors)
     if result[1]!.getKind! == .CONST_BOOLEAN && !result[1]!.getBooleanValue! then
       let sort := result[0]![0]!.getSort!
-      if sort.getKind! == .DATATYPE_SORT && isBuiltinName sort.getDatatype!.getName!.toName then
+      if isDatatypeSort sort && isBuiltinName sort.getDatatype!.getName!.toName then
         return none
       let (u, (α : Q(Sort u))) ← reconstructSortLevelAndSort sort
       let t : Q($α) ← reconstructTerm result[0]![0]!
@@ -111,15 +127,12 @@ def reconstructRewrite (pf : cvc5.Proof) : ReconstructM (Option Expr) := do
   | _ => return none
 
 /-- Build a Lean proof of `¬(t = s)` where `t` and `s` are distinct constructors.
-Uses the `noConfusion` principle: `fun h : t = s => noConfusion False t s h`. -/
+Uses the `noConfusion` principle: `fun h : t = s => noConfusion False t s h`, through
+`mkNoConfusion`, which supplies the type's parameters, if any. -/
 private def proveDistinctValues (t s : Expr) : MetaM Expr := do
-  let α ← inferType t
-  let .const αName _ := α.getAppFn
-    | throwError "Smt.Reconstruct.Datatype: expected inductive type, got {α}"
-  let ncName := αName ++ `noConfusion
   let heq ← mkEq t s
   withLocalDeclD `h heq fun h => do
-    let nc ← mkAppOptM ncName #[some (mkConst ``False), some t, some s, some h]
+    let nc ← mkNoConfusion (mkConst ``False) h
     mkLambdaFVars #[h] nc
 
 @[smt_proof_reconstruct] def reconstructDatatypeProof : ProofReconstructor := fun pf => do
@@ -128,7 +141,7 @@ private def proveDistinctValues (t s : Expr) : MetaM Expr := do
   | .THEORY_REWRITE => reconstructRewrite pf
   | .DISTINCT_VALUES =>
     let sort := pf.getArguments[0]!.getSort!
-    if sort.getKind! == .DATATYPE_SORT && isBuiltinName sort.getDatatype!.getName!.toName then
+    if isDatatypeSort sort && isBuiltinName sort.getDatatype!.getName!.toName then
       return none
     let (u, (α : Q(Sort u))) ← reconstructSortLevelAndSort sort
     let t : Q($α) ← reconstructTerm pf.getArguments[0]!
