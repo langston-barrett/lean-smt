@@ -26,6 +26,9 @@ inductive Command where
   | declare (nm : String) (st : Term)
   | declareDatatypes (sorts : List (String × Nat))
       (dtypes : List (List (String × List (String × Term))))
+  /-- A parametric datatype, `(declare-datatypes ((nm n)) ((par (ps) (ctors))))`, whose
+  constructors' field sorts may mention the sort parameters `ps`. -/
+  | declareParDatatype (nm : String) (ps : List String) (ctors : List (String × List (String × Term)))
   | defineFun (nm : String) (ps : List (String × Term)) (cod : Term) (tm : Term) (rec : Bool)
   | assert (tm : Term)
   | checkSat
@@ -70,6 +73,15 @@ protected def toSexp : Command → Sexp
             sexp!{({quoteSymbol ctorNm} ...{flds})}
         sexp!{(...{ctorDecls})}
     sexp!{(declare-datatypes (...{sortDecls}) (...{dtypeDecls}))}
+  | .declareParDatatype nm ps ctors =>
+    let ctorDecls : List Sexp :=
+      ctors.map fun (ctorNm, fields) =>
+        let flds : List Sexp :=
+          fields.map fun (fnm, fsort) => sexp!{({quoteSymbol fnm} {fsort})}
+        sexp!{({quoteSymbol ctorNm} ...{flds})}
+    let params : List Sexp := ps.map fun p => sexp!{{quoteSymbol p}}
+    sexp!{(declare-datatypes (({quoteSymbol nm} {toString ps.length}))
+      ((par (...{params}) (...{ctorDecls}))))}
   | .defineSort nm ps tm          =>
     sexp!{(define-sort {quoteSymbol nm} (...{ps.map toSexp}) {tm})}
   | .defineFun nm ps cod tm false =>
