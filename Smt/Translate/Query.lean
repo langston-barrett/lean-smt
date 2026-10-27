@@ -62,7 +62,10 @@ def translateAndFindDeps (e : Expr) (fvarDeps := true) : QueryBuilderM (Term × 
   let (tm, depConsts, depFVars) ← Translator.translateExpr e
   -- A universe-polymorphic constant, such as `Option`, at universe 0 for each of its universe
   -- parameters, as `Reconstruct/Datatype.lean` reads it back: its type parameters are then of
-  -- type `Type`, as SMT-LIB's sorts are.
+  -- type `Type`, as SMT-LIB's sorts are. This is right for an inductive type whose parameters are
+  -- `Type u`s, but not in general: for a constant over `Sort u`, universe 0 is `Prop`, which may
+  -- not be the instance that the query uses. Only the constants' own universe levels, read from
+  -- where the query uses them, would be right for every constant.
   let env ← getEnv
   let unknownConsts := depConsts.toArray.filterMap fun nm =>
     if Util.smtConsts.contains nm.toString then none
