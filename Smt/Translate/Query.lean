@@ -66,7 +66,7 @@ def translateAndFindDeps (e : Expr) (fvarDeps := true) : QueryBuilderM (Term × 
   let env ← getEnv
   let unknownConsts := depConsts.toArray.filterMap fun nm =>
     if Util.smtConsts.contains nm.toString then none
-    else some (mkConst nm ((env.find? nm).map (·.levelParams.map fun _ => levelZero) |>.getD []))
+    else some (mkConst nm ((env.find? nm).map (·.levelParams.map fun _ => Level.zero) |>.getD []))
   if fvarDeps then
     let fvs := depFVars.toArray.map mkFVar
     return (tm, fvs ++ unknownConsts)
