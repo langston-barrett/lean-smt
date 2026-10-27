@@ -60,8 +60,13 @@ def addDependency (e e' : Expr) : QueryBuilderM Unit :=
 When `fvarDeps = false`, we filter out dependencies on fvars. -/
 def translateAndFindDeps (e : Expr) (fvarDeps := true) : QueryBuilderM (Term × Array Expr) := do
   let (tm, depConsts, depFVars) ← Translator.translateExpr e
+  -- A universe-polymorphic constant, such as `Option`, at universe 0 for each of its universe
+  -- parameters, as `Reconstruct/Datatype.lean` reads it back: its type parameters are then of
+  -- type `Type`, as SMT-LIB's sorts are.
+  let env ← getEnv
   let unknownConsts := depConsts.toArray.filterMap fun nm =>
-    if Util.smtConsts.contains nm.toString then none else some (mkConst nm)
+    if Util.smtConsts.contains nm.toString then none
+    else some (mkConst nm ((env.find? nm).map (·.levelParams.map fun _ => levelZero) |>.getD []))
   if fvarDeps then
     let fvs := depFVars.toArray.map mkFVar
     return (tm, fvs ++ unknownConsts)
@@ -165,8 +170,11 @@ def addDeclareCommandFor (nm : String) (e tp : Expr) (params : Array Expr) (cod 
               let mut selectorNames : Std.HashSet String := {}
               let mut idx := 0
               for (fname, ftype) in fields do
+                -- A field without a name of its own, as in `Except.error : ε → Except ε α`, whose
+                -- binder is hygienic, is named after its position.
                 let baseName :=
-                  if fname == Name.anonymous then s!"field{idx + 1}" else fname.toString
+                  if fname == Name.anonymous || fname.hasMacroScopes then s!"field{idx + 1}"
+                  else fname.toString
                 let mut selectorName := s!"{ctorNm}.{baseName}"
                 let mut suffix := 1
                 while selectorNames.contains selectorName do
