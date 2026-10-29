@@ -71,6 +71,16 @@ private def isDatatypeSort (s : cvc5.Sort) : Bool :=
   let params := if s.isInstantiated then s.getInstantiatedParameters! else #[]
   return mkAppN (← getFVarOrConstExpr! name) (← params.mapM reconstructSort)
 
+/-- `arg`, a reconstructed SMT Boolean, as the next argument of `f`: the `Bool`
+that it stands for where `f` takes a `Bool`, and itself where it takes a
+proposition. -/
+private def boolField (f arg : Expr) : MetaM Expr := do
+  let .forallE _ d _ _ ← whnf (← inferType f) | return arg
+  unless d.isConstOf ``Bool do return arg
+  if arg.isConstOf ``True then return mkConst ``Bool.true
+  if arg.isConstOf ``False then return mkConst ``Bool.false
+  mkDecide arg
+
 @[smt_term_reconstruct] def reconstructDatatypeTerm : TermReconstructor := fun t => do
   match t.getKind! with
   | .APPLY_CONSTRUCTOR =>
@@ -85,7 +95,11 @@ private def isDatatypeSort (s : cvc5.Sort) : Bool :=
     if sort.isInstantiated then
       curr := mkAppN curr (← sort.getInstantiatedParameters!.mapM reconstructSort)
     for i in [1:t.getNumChildren] do
-      curr := .app curr (← reconstructTerm t[i]!)
+      let arg ← reconstructTerm t[i]!
+      -- SMT-LIB's `Bool` is reconstructed as a proposition, but a field of type
+      -- `Bool` takes a Boolean: `Value.Boolean false`, not `Value.Boolean False`.
+      let arg ← if t[i]!.getSort!.isBoolean then boolField curr arg else pure arg
+      curr := .app curr arg
     return curr
   | _ => return none
 
