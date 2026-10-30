@@ -63,13 +63,19 @@ private def getFVarOrConstExpr! (n : String) : ReconstructM Expr := do
 private def isDatatypeSort (s : cvc5.Sort) : Bool :=
   s.getKind! == .DATATYPE_SORT || (s.isInstantiated && s.isDatatype)
 
+/-- A datatype's type argument: SMT-LIB's `Bool` is `Bool` there, not a
+proposition, since a datatype's parameters are types of data, as in
+`Option Bool`. -/
+private def reconstructParameter (s : cvc5.Sort) : ReconstructM Expr :=
+  if s.isBoolean then return mkConst ``Bool else reconstructSort s
+
 @[smt_sort_reconstruct] def reconstructDatatypeSort : SortReconstructor := fun s => do
   unless isDatatypeSort s do return none
   let name := s.getDatatype!.getName!
   if isBuiltinName name.toName then return none
   -- An instance of a parametric datatype is the inductive type applied to its parameters.
   let params := if s.isInstantiated then s.getInstantiatedParameters! else #[]
-  return mkAppN (← getFVarOrConstExpr! name) (← params.mapM reconstructSort)
+  return mkAppN (← getFVarOrConstExpr! name) (← params.mapM reconstructParameter)
 
 /-- `arg`, a reconstructed SMT Boolean, as the next argument of `f`: the `Bool`
 that it stands for where `f` takes a `Bool`, and itself where it takes a
@@ -93,7 +99,7 @@ private def boolField (f arg : Expr) : MetaM Expr := do
     -- A constructor of a parametric datatype takes the instance's parameters first.
     let sort := t.getSort!
     if sort.isInstantiated then
-      curr := mkAppN curr (← sort.getInstantiatedParameters!.mapM reconstructSort)
+      curr := mkAppN curr (← sort.getInstantiatedParameters!.mapM reconstructParameter)
     for i in [1:t.getNumChildren] do
       let arg ← reconstructTerm t[i]!
       -- SMT-LIB's `Bool` is reconstructed as a proposition, but a field of type
