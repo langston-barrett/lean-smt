@@ -81,7 +81,26 @@ private unsafe def getTranslatorsUnsafe : MetaM (List (Translator × Name)) := d
 /-- Returns the list of translators maintained by `smtExt` in the current
     Lean environment. -/
 @[implemented_by getTranslatorsUnsafe]
-opaque getTranslators : MetaM (List (Translator × Name))
+opaque getTranslatorsUncached : MetaM (List (Translator × Name))
+
+/-- The translators last evaluated, with the names and definitions' hashes
+they were evaluated from. -/
+initialize translatorsCache : IO.Ref (Option (List (Name × UInt64) × List (Translator × Name))) ←
+  IO.mkRef none
+
+/-- `getTranslatorsUncached`, evaluated again only when the registered
+translators' names or definitions change. `applyTranslators?` asks for them
+at every subterm, and evaluating each translator then costs far more than
+the translation itself, mostly in the interpreter's locks. -/
+def getTranslators : MetaM (List (Translator × Name)) := do
+  let env ← getEnv
+  let names := ((smtExt.getState env).getD ``Translator {}).toList
+  let key := names.map fun n => (n, ((env.find? n).bind (·.value?)).map (·.hash) |>.getD 0)
+  if let some (k, ts) ← translatorsCache.get then
+    if k == key then return ts
+  let ts ← getTranslatorsUncached
+  translatorsCache.set (some (key, ts))
+  return ts
 
 /-- Return a cached translation of `e` if found, otherwise run `k e` and cache the result. -/
 def withCache (k : Translator) (e : Expr) : TranslationM (Option Term) := do
